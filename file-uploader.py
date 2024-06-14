@@ -1,0 +1,158 @@
+import serial
+import json
+import time
+import sys
+import os
+import binascii
+import argparse
+
+class UARTUploader:
+    def __init__(self, port, baudrate=115200, chunk_size=64, timeout=1, is_text=False):
+        self.port = port
+        self.baudrate = baudrate
+        self.chunk_size = chunk_size
+        self.timeout = timeout
+        self.is_text = is_text
+        self.serial_connection = None
+        self.file_handle = None
+
+    def open_connection(self):
+        try:
+            self.serial_connection = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+            print(f"Opened connection to {self.port} at {self.baudrate} baud.")
+        except serial.SerialException as e:
+            print(f"Failed to open serial port: {e}")
+            sys.exit(1)  # Exit code 1: Failed to open serial port
+
+    def close_connection(self):
+        if self.serial_connection and self.serial_connection.is_open:
+            self.serial_connection.close()
+            print("Closed serial connection.")
+
+    def open_destination_file(self, filename, file_size):
+        command = {"fopen": [filename, "w", file_size]}
+        self.serial_connection.write((json.dumps(command) + '\r').encode())
+        print(f"Sent fopen command for file {filename} with size {file_size}.")
+
+        fopen_response = self.read_response()
+        if fopen_response and "fopen" in fopen_response:
+            self.file_handle = fopen_response["fopen"][0]
+            print(f"Device opened file with handle {self.file_handle}.")
+            end_response = self.read_response()
+            if end_response and "end" in end_response and end_response["end"][0] == 0:
+                print("File open transaction completed successfully.")
+                return True
+            else:
+                print("Failed to complete file open transaction.")
+                return False
+        else:
+            print("Failed to open file.")
+            return False
+
+    def write_chunk(self, chunk):
+        if self.is_text:
+            command = {"fwrite": [self.file_handle, chunk.decode()]}
+        else:
+            hex_chunk = binascii.hexlify(chunk).decode()
+            command = {"fwritex": [self.file_handle, hex_chunk]}
+        self.serial_connection.write((json.dumps(command) + '\r').encode())
+        print(f"Sent chunk of size {len(chunk)}.")
+
+        response = self.read_response()
+        if response and "end" in response and response["end"][0] == 0:
+            print("Chunk acknowledged by the server.")
+            return True
+        else:
+            print("Chunk not acknowledged by the server.")
+            return False
+
+    def close_file(self):
+        if self.file_handle is not None:
+            command = {"fclose": [self.file_handle]}
+            self.serial_connection.write((json.dumps(command) + '\r').encode())
+            print(f"Sent fclose command for handle {self.file_handle}.")
+
+            response = self.read_response()
+            if response and "end" in response and response["end"][0] == 0:
+                print("File closed successfully.")
+                return True
+            else:
+                print("Failed to close file.")
+                return False
+        return True  # File was not opened
+
+    def on_async_response(self, response):
+        print(f"Received asynchronous response: {response}")
+        return True
+
+    def read_response(self, resp_timeout_sec=1):
+        self.serial_connection.timeout = resp_timeout_sec
+        while True:
+            response = self.serial_connection.readline().decode().strip()
+            if response:
+                try:
+                    response_json = json.loads(response)
+                    if len(response_json) != 1:
+                        print("Device is not StreamJSON compliant: multiple keys in response.")
+                        self.close_file()
+                        self.close_connection()
+                        sys.exit(2)  # Exit code 2: Non-compliant StreamJSON response
+                    key = next(iter(response_json))
+                    if key.startswith("+"):
+                        if self.on_async_response(response_json):
+                            continue
+                    return response_json
+                except json.JSONDecodeError:
+                    print("Received invalid JSON response.")
+                    self.close_file()
+                    self.close_connection()
+                    sys.exit(3)  # Exit code 3: Invalid JSON response
+            return None
+
+    def upload_file(self, file_path, filename):
+        try:
+            file_size = os.path.getsize(file_path)
+            if not self.open_destination_file(filename, file_size):
+                print("Failed to open destination file.")
+                sys.exit(4)  # Exit code 4: Failed to open destination file
+
+            with open(file_path, 'rb') as file:
+                while chunk := file.read(self.chunk_size):
+                    if not self.write_chunk(chunk):
+                        print("Failed to send chunk. Aborting upload.")
+                        sys.exit(5)  # Exit code 5: Failed to send chunk
+
+            if not self.close_file():
+                print("Failed to complete the transaction. Aborting upload.")
+                sys.exit(6)  # Exit code 6: Failed to close file after upload
+            else:
+                print("File uploaded successfully.")
+        except FileNotFoundError:
+            print(f"File {file_path} not found.")
+            sys.exit(7)  # Exit code 7: File not found
+        except Exception as e:
+            print(f"Error during file upload: {e}")
+            sys.exit(8)  # Exit code 8: General exception during file upload
+
+def main():
+    parser = argparse.ArgumentParser(description="Upload a file to an embedded device over UART.")
+    parser.add_argument("filename", help="The file to upload")
+    parser.add_argument("serial_port", help="The serial port to use for the connection")
+    parser.add_argument("-t", "--text", action="store_true", help="Indicate if the file is a text file")
+
+    args = parser.parse_args()
+
+    file_path = args.filename
+    port = args.serial_port
+    is_text = args.text
+    baudrate = 115200  # Default baudrate
+    chunk_size = 64  # Default chunk size
+    filename = os.path.basename(file_path)[:4]  # Use the first 4 characters of the file name as the device file name
+
+    uploader = UARTUploader(port, baudrate, chunk_size, is_text=is_text)
+    uploader.open_connection()
+    uploader.upload_file(file_path, filename)
+    uploader.close_connection()
+
+if __name__ == "__main__":
+    main()

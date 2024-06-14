@@ -7,12 +7,13 @@ import binascii
 import argparse
 
 class UARTUploader:
-    def __init__(self, port, baudrate=115200, chunk_size=64, timeout=1, is_text=False):
+    def __init__(self, port, baudrate=115200, chunk_size=64, timeout=1, is_text=False, use_done_key=False):
         self.port = port
         self.baudrate = baudrate
         self.chunk_size = chunk_size
         self.timeout = timeout
         self.is_text = is_text
+        self.use_done_key = use_done_key
         self.serial_connection = None
         self.file_handle = None
 
@@ -38,8 +39,9 @@ class UARTUploader:
         if fopen_response and "fopen" in fopen_response:
             self.file_handle = fopen_response["fopen"][0]
             print(f"Device opened file with handle {self.file_handle}.")
-            end_response = self.read_response()
-            if end_response and "end" in end_response and end_response["end"][0] == 0:
+            end_response_key = "done" if self.use_done_key else "end"
+            end_response = self.read_response(end_response_key=end_response_key)
+            if end_response and end_response_key in end_response and end_response[end_response_key][0] == 0:
                 print("File open transaction completed successfully.")
                 return True
             else:
@@ -59,7 +61,8 @@ class UARTUploader:
         print(f"Sent chunk of size {len(chunk)}.")
 
         response = self.read_response()
-        if response and "end" in response and response["end"][0] == 0:
+        end_response_key = "done" if self.use_done_key else "end"
+        if response and end_response_key in response and response[end_response_key][0] == 0:
             print("Chunk acknowledged by the server.")
             return True
         else:
@@ -73,7 +76,8 @@ class UARTUploader:
             print(f"Sent fclose command for handle {self.file_handle}.")
 
             response = self.read_response()
-            if response and "end" in response and response["end"][0] == 0:
+            end_response_key = "done" if self.use_done_key else "end"
+            if response and end_response_key in response and response[end_response_key][0] == 0:
                 print("File closed successfully.")
                 return True
             else:
@@ -85,7 +89,7 @@ class UARTUploader:
         print(f"Received asynchronous response: {response}")
         return True
 
-    def read_response(self, resp_timeout_sec=1):
+    def read_response(self, resp_timeout_sec=1, end_response_key="end"):
         self.serial_connection.timeout = resp_timeout_sec
         while True:
             response = self.serial_connection.readline().decode().strip()
@@ -139,17 +143,19 @@ def main():
     parser.add_argument("filename", help="The file to upload")
     parser.add_argument("serial_port", help="The serial port to use for the connection")
     parser.add_argument("-t", "--text", action="store_true", help="Indicate if the file is a text file")
+    parser.add_argument("-d", "--done", action="store_true", help="Use 'done' instead of 'end' for the transaction end response key")
 
     args = parser.parse_args()
 
     file_path = args.filename
     port = args.serial_port
     is_text = args.text
+    use_done_key = args.done
     baudrate = 115200  # Default baudrate
     chunk_size = 64  # Default chunk size
     filename = os.path.basename(file_path)[:4]  # Use the first 4 characters of the file name as the device file name
 
-    uploader = UARTUploader(port, baudrate, chunk_size, is_text=is_text)
+    uploader = UARTUploader(port, baudrate, chunk_size, is_text=is_text, use_done_key=use_done_key)
     uploader.open_connection()
     uploader.upload_file(file_path, filename)
     uploader.close_connection()

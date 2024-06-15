@@ -133,6 +133,24 @@ class UARTUploader:
                 break
         return line
 
+    def ffs_format(self, timeout=10):
+        command = {"format": ["ffs"]}
+        self.serial_connection.write((json.dumps(command) + '\r').encode())
+        self.log_print("Sent format command for flash file system.")
+        
+        response = self.read_response(resp_timeout_sec=timeout)
+        if response and self.end_response_key in response:
+            status_code, description = response[self.end_response_key]
+            if status_code == 0:
+                self.log_print("Flash file system formatted successfully.")
+                return True
+            else:
+                print(f"Failed to format flash file system: {description}")
+                return False
+        else:
+            print("No response received for flash file system format.")
+            return False
+
     def upload_file(self, file_path, filename):
         try:
             file_size = os.path.getsize(file_path)
@@ -165,6 +183,7 @@ def main():
     parser.add_argument("-t", "--text", action="store_true", help="Indicate if the file is a text file")
     parser.add_argument("-d", "--done", action="store_true", help="Use 'done' instead of 'end' for the transaction end response key")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("-f", "--format", action="store_true", help="Format the flash file system before uploading")
 
     args = parser.parse_args()
 
@@ -173,12 +192,18 @@ def main():
     is_text = args.text
     use_done_key = args.done
     verbose = args.verbose
+    format_flash = args.format
     baudrate = 115200  # Default baudrate
     chunk_size = 64  # Default chunk size
     filename = os.path.basename(file_path)[:4]  # Use the first 4 characters of the file name as the device file name
 
     uploader = UARTUploader(port, baudrate, chunk_size, is_text=is_text, use_done_key=use_done_key, verbose=verbose)
     uploader.open_connection()
+    
+    if format_flash:
+        if not uploader.ffs_format(timeout=10):
+            sys.exit(9)  # Exit code 9: Failed to format flash file system
+
     uploader.upload_file(file_path, filename)
     uploader.close_connection()
 

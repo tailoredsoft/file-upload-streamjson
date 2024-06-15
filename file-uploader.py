@@ -146,6 +146,7 @@ class UARTUploader:
                 sys.exit(6)  # Exit code 6: Failed to close file after upload
             else:
                 self.log_print("File uploaded successfully.")
+                print(f"File '{file_path}' uploaded successfully with size {file_size} bytes.")
         except FileNotFoundError:
             print(f"File {file_path} not found.")
             sys.exit(7)  # Exit code 7: File not found

@@ -16,6 +16,7 @@ class UARTUploader:
         self.verbose = verbose
         self.serial_connection = None
         self.file_handle = None
+        self.end_response_key = "done" if use_done_key else "end"
 
     def log_print(self, message):
         if self.verbose:
@@ -39,21 +40,19 @@ class UARTUploader:
         self.serial_connection.write((json.dumps(command) + '\r').encode())
         self.log_print(f"Sent fopen command for file {filename} with size {file_size}.")
 
-        fopen_response = self.read_response()
-        if fopen_response and "fopen" in fopen_response:
-            self.file_handle = fopen_response["fopen"][0]
-            self.log_print(f"Device opened file with handle {self.file_handle}.")
-            end_response_key = "done" if self.use_done_key else "end"
-            end_response = self.read_response(end_response_key=end_response_key)
-            if end_response and end_response_key in end_response and end_response[end_response_key][0] == 0:
-                self.log_print("File open transaction completed successfully.")
-                return True
-            else:
-                print("Failed to complete file open transaction.")
-                return False
-        else:
-            print("Failed to open file.")
-            return False
+        while True:
+            response = self.read_response()
+            if response:
+                if "fopen" in response:
+                    self.file_handle = response["fopen"][0]
+                    self.log_print(f"Device opened file with handle {self.file_handle}.")
+                    break
+                if self.end_response_key in response:
+                    self.on_end_response(response)
+                    if response[self.end_response_key][0] != 0:
+                        print(f"Failed to open file: {response[self.end_response_key][1]}")
+                    return False
+        return True
 
     def write_chunk(self, chunk):
         if self.is_text:
@@ -65,8 +64,7 @@ class UARTUploader:
         self.log_print(f"Sent chunk of size {len(chunk)}.")
 
         response = self.read_response()
-        end_response_key = "done" if self.use_done_key else "end"
-        if response and end_response_key in response and response[end_response_key][0] == 0:
+        if response and self.end_response_key in response and response[self.end_response_key][0] == 0:
             self.log_print("Chunk acknowledged by the server.")
             return True
         else:
@@ -80,8 +78,7 @@ class UARTUploader:
             self.log_print(f"Sent fclose command for handle {self.file_handle}.")
 
             response = self.read_response()
-            end_response_key = "done" if self.use_done_key else "end"
-            if response and end_response_key in response and response[end_response_key][0] == 0:
+            if response and self.end_response_key in response and response[self.end_response_key][0] == 0:
                 self.log_print("File closed successfully.")
                 return True
             else:
@@ -93,7 +90,13 @@ class UARTUploader:
         self.log_print(f"Received asynchronous response: {response}")
         return True
 
-    def read_response(self, resp_timeout_sec=1, end_response_key="end"):
+    def on_end_response(self, response):
+        if self.end_response_key in response:
+            status_code, description = response[self.end_response_key]
+            if status_code != 0:
+                print(f"Error {status_code}: {description}")
+
+    def read_response(self, resp_timeout_sec=1):
         self.serial_connection.timeout = resp_timeout_sec
         while True:
             response = self.read_single_response()
@@ -109,6 +112,8 @@ class UARTUploader:
                     if key.startswith("+"):
                         if self.on_async_response(response_json):
                             continue
+                    if key == self.end_response_key:
+                        self.on_end_response(response_json)
                     return response_json
                 except json.JSONDecodeError:
                     print("Received invalid JSON response.")

@@ -233,6 +233,10 @@ def main():
         if not uploader.ffs_format(timeout=10):
             sys.exit(9)  # Exit code 9: Failed to format flash file system
 
+    free_space_before = uploader.get_free_space()
+    if free_space_before is not None:
+        print(f"Free space before upload: {free_space_before} bytes")
+
     uploader.upload_file(file_path, filename)
     
     free_space_after = uploader.get_free_space()

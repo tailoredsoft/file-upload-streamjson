@@ -48,9 +48,9 @@ class UARTUploader:
                     self.log_print(f"Device opened file with handle {self.file_handle}.")
                     break
                 if self.end_response_key in response:
-                    self.on_end_response(response)
-                    if response[self.end_response_key][0] != 0:
-                        print(f"Failed to open file: {response[self.end_response_key][1]}")
+                    status_code, description = response[self.end_response_key]
+                    if status_code != 0:
+                        print(f"Failed to open destination file: {description}")
                     return False
         return True
 
@@ -137,7 +137,6 @@ class UARTUploader:
         try:
             file_size = os.path.getsize(file_path)
             if not self.open_destination_file(filename, file_size):
-                print("Failed to open destination file.")
                 sys.exit(4)  # Exit code 4: Failed to open destination file
 
             with open(file_path, 'rb') as file:

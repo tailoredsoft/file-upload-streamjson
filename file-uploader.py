@@ -35,24 +35,53 @@ class UARTUploader:
             self.serial_connection.close()
             self.log_print("Closed serial connection.")
 
+    def get_free_space(self):
+        command = {"ffsfree": []}
+        self.serial_connection.write((json.dumps(command) + '\r').encode())
+        self.log_print("Sent ffsfree command to get free space.")
+
+        response = self.read_response()
+        if response and "ffsfree" in response:
+            free_space = response["ffsfree"][0]
+            self.log_print(f"Free space: {free_space} bytes")
+        else:
+            free_space = None
+
+        end_response = self.read_response()
+        if end_response and self.end_response_key in end_response:
+            self.on_end_response(end_response)
+        
+        return free_space
+
     def open_destination_file(self, filename, file_size):
         command = {"fopen": [filename, "w", file_size]}
         self.serial_connection.write((json.dumps(command) + '\r').encode())
         self.log_print(f"Sent fopen command for file {filename} with size {file_size}.")
 
-        while True:
-            response = self.read_response()
-            if response:
-                if "fopen" in response:
-                    self.file_handle = response["fopen"][0]
-                    self.log_print(f"Device opened file with handle {self.file_handle}.")
-                    break
-                if self.end_response_key in response:
-                    status_code, description = response[self.end_response_key]
+        response = self.read_response()
+
+        if response:
+            if self.end_response_key in response:
+                status_code, description = response[self.end_response_key]
+                if status_code != 0:
+                    print(f"Failed to open destination file: {description}")
+                return status_code == 0
+            elif "fopen" in response:
+                self.file_handle = response["fopen"][0]
+                self.log_print(f"Device opened file with handle {self.file_handle}.")
+                end_response = self.read_response()
+                if end_response and self.end_response_key in end_response:
+                    status_code, description = end_response[self.end_response_key]
                     if status_code != 0:
                         print(f"Failed to open destination file: {description}")
-                    return False
-        return True
+                    return status_code == 0
+            else:
+                print("Received unexpected response. Device is not StreamJSON compliant.")
+                self.close_file()
+                self.close_connection()
+                sys.exit(2)  # Exit code 2: Non-compliant StreamJSON response
+
+        return False
 
     def write_chunk(self, chunk):
         if self.is_text:
@@ -205,6 +234,11 @@ def main():
             sys.exit(9)  # Exit code 9: Failed to format flash file system
 
     uploader.upload_file(file_path, filename)
+    
+    free_space_after = uploader.get_free_space()
+    if free_space_after is not None:
+        print(f"Free space after upload: {free_space_after} bytes")
+
     uploader.close_connection()
 
 if __name__ == "__main__":

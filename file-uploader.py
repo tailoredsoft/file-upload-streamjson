@@ -1,13 +1,12 @@
 import serial
 import json
-import time
 import sys
 import os
 import binascii
 import argparse
 
 class UARTUploader:
-    def __init__(self, port, baudrate=115200, chunk_size=64, timeout=1, is_text=False, use_done_key=False):
+    def __init__(self, port, baudrate=115200, chunk_size=32, timeout=1, is_text=False, use_done_key=False):
         self.port = port
         self.baudrate = baudrate
         self.chunk_size = chunk_size
@@ -91,27 +90,37 @@ class UARTUploader:
 
     def read_response(self, resp_timeout_sec=1, end_response_key="end"):
         self.serial_connection.timeout = resp_timeout_sec
-        while True:
-            response = self.serial_connection.readline().decode().strip()
-            if response:
-                try:
-                    response_json = json.loads(response)
-                    if len(response_json) != 1:
-                        print("Device is not StreamJSON compliant: multiple keys in response.")
-                        self.close_file()
-                        self.close_connection()
-                        sys.exit(2)  # Exit code 2: Non-compliant StreamJSON response
-                    key = next(iter(response_json))
-                    if key.startswith("+"):
-                        if self.on_async_response(response_json):
-                            continue
-                    return response_json
-                except json.JSONDecodeError:
-                    print("Received invalid JSON response.")
+        response = self.ReadLineCR()
+        if response:
+            try:
+                response_json = json.loads(response.decode())
+                if len(response_json) != 1:
+                    print("Device is not StreamJSON compliant: multiple keys in response.")
                     self.close_file()
                     self.close_connection()
-                    sys.exit(3)  # Exit code 3: Invalid JSON response
-            return None
+                    sys.exit(2)  # Exit code 2: Non-compliant StreamJSON response
+                key = next(iter(response_json))
+                if key.startswith("+"):
+                    if self.on_async_response(response_json):
+                        return self.read_response(resp_timeout_sec, end_response_key)  # Re-read if async response handled
+                return response_json
+            except json.JSONDecodeError:
+                print("Received invalid JSON response.")
+                self.close_file()
+                self.close_connection()
+                sys.exit(3)  # Exit code 3: Invalid JSON response
+        return None
+
+    def ReadLineCR(self):
+        line = bytearray()
+        while True:
+            byte = self.serial_connection.read(1)
+            if not byte:
+                break  # Timeout or end of data
+            line.extend(byte)
+            if byte == b'\r':
+                break
+        return line
 
     def upload_file(self, file_path, filename):
         try:

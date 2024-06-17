@@ -1,2 +1,7 @@
 /sample.txt
 /test_sample.txt
+*.pyc
+*z.py
+*.mpy
+/mpy-cross.exe
+/myappz.mpy.upload.log.txt

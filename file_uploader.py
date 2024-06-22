@@ -6,12 +6,13 @@ import binascii
 import argparse
 
 class UARTUploader:
-    def __init__(self, port, baudrate=115200, chunk_size=64, timeout=1, is_text=False, use_done_key=False, verbose=False):
+    def __init__(self, port, baudrate=115200, chunk_size=64, timeout=1, is_text=False, use_done_key=False, verbose=False, add_null=False):
         self.port = port
         self.baudrate = baudrate
         self.chunk_size = chunk_size
         self.timeout = timeout
         self.is_text = is_text
+        self.add_null = add_null
         self.use_done_key = use_done_key
         self.verbose = verbose
         self.serial_connection = None
@@ -100,6 +101,19 @@ class UARTUploader:
             print("Chunk not acknowledged by the server.")
             return False
 
+    def write_null(self):
+        command = {"fwritex": [self.file_handle, "00"]}
+        self.serial_connection.write((json.dumps(command) + '\r').encode())
+        self.log_print("Sent null byte before closing the file.")
+
+        response = self.read_response()
+        if response and self.end_response_key in response and response[self.end_response_key][0] == 0:
+            self.log_print("Null acknowledged by the server.")
+            return True
+        else:
+            print("Null not acknowledged by the server.")
+            return False
+
     def close_file(self):
         if self.file_handle is not None:
             command = {"fclose": [self.file_handle]}
@@ -183,6 +197,10 @@ class UARTUploader:
     def upload_file(self, file_path, filename):
         try:
             file_size = os.path.getsize(file_path)
+
+            if self.add_null and self.is_text:
+                file_size = file_size+1
+
             if not self.open_destination_file(filename, file_size):
                 sys.exit(4)  # Exit code 4: Failed to open destination file
 
@@ -191,6 +209,11 @@ class UARTUploader:
                     if not self.write_chunk(chunk):
                         print("Failed to send chunk. Aborting upload.")
                         sys.exit(5)  # Exit code 5: Failed to send chunk
+
+            if self.add_null and self.is_text:
+                if not self.write_null():
+                    print("Failed to send null. Aborting upload.")
+                    sys.exit(5)  # Exit code 5: Failed to send null chunk
 
             if not self.close_file():
                 print("Failed to complete the transaction. Aborting upload.")
@@ -210,6 +233,7 @@ def main():
     parser.add_argument("filename", help="The file to upload")
     parser.add_argument("serial_port", help="The serial port to use for the connection")
     parser.add_argument("-t", "--text", action="store_true", help="Indicate if the file is a text file")
+    parser.add_argument("-n", "--null", action="store_true", help="Add a null terminate if a text file")
     parser.add_argument("-d", "--done", action="store_true", help="Use 'done' instead of 'end' for the transaction end response key")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("-f", "--format", action="store_true", help="Format the flash file system before uploading")
@@ -219,6 +243,7 @@ def main():
     file_path = args.filename
     port = args.serial_port
     is_text = args.text
+    add_null = args.null
     use_done_key = args.done
     verbose = args.verbose
     format_flash = args.format
@@ -226,7 +251,7 @@ def main():
     chunk_size = 64  # Default chunk size
     filename = os.path.basename(file_path)[:4]  # Use the first 4 characters of the file name as the device file name
 
-    uploader = UARTUploader(port, baudrate, chunk_size, is_text=is_text, use_done_key=use_done_key, verbose=verbose)
+    uploader = UARTUploader(port, baudrate, chunk_size, is_text=is_text, use_done_key=use_done_key, verbose=verbose, add_null=add_null)
     uploader.open_connection()
     
     if format_flash:
